@@ -64,10 +64,12 @@ NULL
 #' @param conf.int If \code{TRUE} columns for the lower (\code{conf.low}) and upper (\code{conf.high}) bounds of the
 #'   \code{100*prob}\% posterior uncertainty intervals are included. See
 #'   \code{\link[rstantools]{posterior_interval}} for details.
-#' @param rhat Whether to calculate the *Rhat* convergence metric
-#'   (\code{FALSE} by default). Requires the \pkg{posterior} package.
-#' @param ess Whether to calculate the *effective sample size* (ESS) convergence metric
-#'   (\code{FALSE} by default). Requires the \pkg{posterior} package.
+#' @param rhat Whether to include the *Rhat* convergence metric
+#'   (\code{FALSE} by default). Uses the Rhat values computed by rstanarm
+#'   and stored in the model summary.
+#' @param ess Whether to include the *effective sample size* (ESS) convergence metric
+#'   (\code{FALSE} by default). Uses the n_eff values computed by rstanarm
+#'   and stored in the model summary.
 #' @param fix.intercept Rename \code{"Intercept"} to \code{"(Intercept)"},
 #'   to match behavior of other model types? Defaults to \code{TRUE}.
 #'
@@ -129,16 +131,14 @@ tidy.stanreg <- function(x,
         stop("Model does not have varying ('ran_vals') or hierarchical ('ran_pars') effects.")
     }
 
-    ## Define point estimate and standard error functions based on robust
-    pointfun <- if (robust) stats::median else base::mean
-    stdfun <- if (robust) stats::mad else stats::sd
-
     nn <- c("estimate", "std.error")
     ret_list <- list()
 
-    ## Track samples needed for rhat/ess computation
-    samples_for_diag <- NULL
+    ## Track parameter names for rhat/ess lookup
     pars_for_diag <- character(0)
+
+    ## Get the summary matrix from rstanarm (contains mean, sd, 50%, Rhat, n_eff, etc.)
+    stan_summary <- x$stan_summary
 
     if ("fixed" %in% effects) {
         nv_pars <- names(rstanarm::fixef(x))
@@ -150,25 +150,22 @@ tidy.stanreg <- function(x,
                 rstanarm::se(x)[nv_pars]
             )
         } else {
-            ## Extract posterior samples and compute mean/sd
-            m <- as.matrix(x$stanfit)
-            m <- m[, colnames(m) %in% nv_pars, drop = FALSE]
-            ret <- cbind(
-                apply(m, 2, pointfun),
-                apply(m, 2, stdfun)
-            )
+            ## Use rstanarm's summary which already contains mean and sd
+            ret <- stan_summary[nv_pars, c("mean", "sd"), drop = FALSE]
         }
 
         if (inherits(x, "polr")) {
             ## also include cutpoints
-            cp <- x$zeta
-            cp_samples <- as.matrix(x, pars = names(cp))
-            se_cp <- apply(cp_samples, 2, stdfun)
-            if (!robust) {
-                cp <- apply(cp_samples, 2, pointfun)
+            cp_names <- names(x$zeta)
+            if (robust) {
+                cp <- x$zeta
+                se_cp <- rstanarm::se(x)[cp_names]
+            } else {
+                cp <- stan_summary[cp_names, "mean"]
+                se_cp <- stan_summary[cp_names, "sd"]
             }
             ret <- rbind(ret, cbind(cp, se_cp))
-            nv_pars <- c(nv_pars, names(cp))
+            nv_pars <- c(nv_pars, cp_names)
         }
 
         if (conf.int) {
@@ -193,7 +190,7 @@ tidy.stanreg <- function(x,
     }
     if ("auxiliary" %in% effects) {
         nn <- c("estimate", "std.error")
-        parnames <- rownames(x$stan_summary)
+        parnames <- rownames(stan_summary)
         auxpars <- c(
             "sigma", "shape", "overdispersion", "R2", "log-fit_ratio",
             grep("mean_PPD", parnames, value = TRUE)
@@ -201,16 +198,13 @@ tidy.stanreg <- function(x,
         auxpars <- auxpars[which(auxpars %in% parnames)]
 
         if (robust) {
-            ## Use summary's 50% (median) and sd
-            ret <- summary(x, pars = auxpars)[, c("50%", "sd"), drop = FALSE]
+            ## Use stan_summary's 50% (median) for estimate
+            ## Note: rstanarm's se() uses MAD for robust SE, but stan_summary
+            ## only has sd. For auxiliary params, use sd as approximation.
+            ret <- stan_summary[auxpars, c("50%", "sd"), drop = FALSE]
         } else {
-            ## Extract posterior samples and compute mean/sd
-            aux_samples <- as.matrix(x$stanfit)
-            aux_samples <- aux_samples[, colnames(aux_samples) %in% auxpars, drop = FALSE]
-            ret <- cbind(
-                apply(aux_samples, 2, pointfun),
-                apply(aux_samples, 2, stdfun)
-            )
+            ## Use stan_summary's mean and sd
+            ret <- stan_summary[auxpars, c("mean", "sd"), drop = FALSE]
         }
 
         if (conf.int) {
@@ -250,20 +244,18 @@ tidy.stanreg <- function(x,
 
     if ("ran_vals" %in% effects) {
         nn <- c("estimate", "std.error")
-        s <- summary(x, pars = "varying") ## goes through to rstanarm
-        ran_val_pars <- rownames(s)
+        ## Get random effect parameter names (those starting with "b[")
+        ran_val_pars <- grep("^b\\[", rownames(stan_summary), value = TRUE)
 
         if (robust) {
-            ## Use summary's 50% (median) and se (mad)
-            ret <- cbind(s[, "50%"], rstanarm::se(x)[ran_val_pars])
-        } else {
-            ## Extract posterior samples and compute mean/sd
-            rv_samples <- as.matrix(x$stanfit)
-            rv_samples <- rv_samples[, colnames(rv_samples) %in% ran_val_pars, drop = FALSE]
+            ## Use stan_summary's 50% (median) and MAD from rstanarm::se()
             ret <- cbind(
-                apply(rv_samples, 2, pointfun),
-                apply(rv_samples, 2, stdfun)
+                stan_summary[ran_val_pars, "50%"],
+                rstanarm::se(x)[ran_val_pars]
             )
+        } else {
+            ## Use stan_summary's mean and sd
+            ret <- stan_summary[ran_val_pars, c("mean", "sd"), drop = FALSE]
         }
 
         if (conf.int) {
@@ -301,43 +293,26 @@ tidy.stanreg <- function(x,
     out <- dplyr::bind_rows(ret_list)
 
     ## Add rhat and ess if requested
+    ## Use rstanarm's built-in Rhat and n_eff from stan_summary
     if (rhat || ess) {
-        if (!requireNamespace("posterior", quietly = TRUE)) {
-            stop(paste0(
-                paste0(c("rhat", "ess")[c(rhat, ess)], collapse = ", "),
-                " calculation for stanreg objects requires posterior package"
-            ))
-        }
-
-        ## Get draws in the format needed by posterior
         if (length(pars_for_diag) > 0) {
-            ## Extract posterior samples as array (chains x iterations x parameters)
-            draws <- as.array(x$stanfit)
-            ## Filter to relevant parameters
-            available_pars <- intersect(pars_for_diag, dimnames(draws)[[3]])
+            available_pars <- intersect(pars_for_diag, rownames(stan_summary))
             if (length(available_pars) > 0) {
-                draws <- draws[, , available_pars, drop = FALSE]
-                draws_obj <- posterior::as_draws_array(draws)
-
-                posterior_metrics <- c()
-                if (rhat) {
-                    posterior_metrics <- c(posterior_metrics, rhat = posterior::rhat)
-                }
-                if (ess) {
-                    posterior_metrics <- c(posterior_metrics, ess = posterior::ess_basic)
-                }
-
-                diag_df <- posterior::summarise_draws(draws_obj, posterior_metrics)
-
-                ## Match diagnostics to output terms
-                for (metric in names(posterior_metrics)) {
-                    out[[metric]] <- NA_real_
-                    for (i in seq_len(nrow(diag_df))) {
-                        par_name <- diag_df$variable[i]
-                        ## Match parameter to term (may need adjustment for different naming)
+                if (rhat && "Rhat" %in% colnames(stan_summary)) {
+                    out$rhat <- NA_real_
+                    for (par_name in available_pars) {
                         match_idx <- which(out$term == par_name)
                         if (length(match_idx) > 0) {
-                            out[[metric]][match_idx] <- diag_df[[metric]][i]
+                            out$rhat[match_idx] <- stan_summary[par_name, "Rhat"]
+                        }
+                    }
+                }
+                if (ess && "n_eff" %in% colnames(stan_summary)) {
+                    out$ess <- NA_real_
+                    for (par_name in available_pars) {
+                        match_idx <- which(out$term == par_name)
+                        if (length(match_idx) > 0) {
+                            out$ess[match_idx] <- stan_summary[par_name, "n_eff"]
                         }
                     }
                 }

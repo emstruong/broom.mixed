@@ -92,17 +92,16 @@ if (suppressPackageStartupMessages(require(rstanarm, quietly = TRUE))) {
       expect_false("(Intercept)" %in% td_nofix$term)
   })
 
-  if (requireNamespace("posterior", quietly = TRUE)) {
-      test_that("rhat and ess parameters work", {
-          td_diag <- tidy(fit, effects = "fixed", rhat = TRUE, ess = TRUE)
+  ## rhat/ess no longer require posterior package - uses rstanarm's built-in values
+  test_that("rhat and ess parameters work", {
+      td_diag <- tidy(fit, effects = "fixed", rhat = TRUE, ess = TRUE)
 
-          expect_true("rhat" %in% colnames(td_diag))
-          expect_true("ess" %in% colnames(td_diag))
-          ## Values should be numeric and not all NA
-          expect_true(is.numeric(td_diag$rhat))
-          expect_true(is.numeric(td_diag$ess))
-      })
-  }
+      expect_true("rhat" %in% colnames(td_diag))
+      expect_true("ess" %in% colnames(td_diag))
+      ## Values should be numeric and not all NA
+      expect_true(is.numeric(td_diag$rhat))
+      expect_true(is.numeric(td_diag$ess))
+  })
 
   test_that("robust works with ran_vals", {
       td_robust <- tidy(fit, effects = "ran_vals", robust = TRUE)
