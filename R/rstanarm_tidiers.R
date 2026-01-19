@@ -56,18 +56,30 @@ NULL
 
 #' @rdname rstanarm_tidiers
 #' @inheritParams brms_tidiers
+#' @param robust Whether to use median and median absolute deviation of
+#'   the posterior distribution, rather than mean and standard deviation,
+#'   to derive point estimates and uncertainty. Defaults to \code{TRUE}
+#'   for consistency with \pkg{rstanarm}'s default behavior.
 #' @param conf.level See \code{\link[rstantools]{posterior_interval}}.
 #' @param conf.int If \code{TRUE} columns for the lower (\code{conf.low}) and upper (\code{conf.high}) bounds of the
 #'   \code{100*prob}\% posterior uncertainty intervals are included. See
 #'   \code{\link[rstantools]{posterior_interval}} for details.
+#' @param rhat Whether to calculate the *Rhat* convergence metric
+#'   (\code{FALSE} by default). Requires the \pkg{posterior} package.
+#' @param ess Whether to calculate the *effective sample size* (ESS) convergence metric
+#'   (\code{FALSE} by default). Requires the \pkg{posterior} package.
+#' @param fix.intercept Rename \code{"Intercept"} to \code{"(Intercept)"},
+#'   to match behavior of other model types? Defaults to \code{TRUE}.
 #'
 #' @return
 #' When \code{effects="fixed"} (the default), \code{tidy.stanreg} returns
 #' one row for each coefficient, with three columns:
 #' \item{term}{The name of the corresponding term in the model.}
-#' \item{estimate}{A point estimate of the coefficient (posterior median).}
+#' \item{estimate}{A point estimate of the coefficient (posterior median if
+#'   \code{robust=TRUE}, posterior mean if \code{robust=FALSE}).}
 #' \item{std.error}{A standard error for the point estimate based on
-#' \code{\link[stats]{mad}}. See the \emph{Uncertainty estimates} section in
+#' \code{\link[stats]{mad}} if \code{robust=TRUE}, or standard deviation
+#' if \code{robust=FALSE}. See the \emph{Uncertainty estimates} section in
 #' \code{\link[rstanarm]{print.stanreg}} for more details.}
 #'
 #' For models with group-specific parameters (e.g., models fit with
@@ -89,9 +101,13 @@ NULL
 #' @export
 tidy.stanreg <- function(x,
                          effects = c("fixed", "ran_pars"),
+                         robust = TRUE,
                          conf.int = FALSE,
                          conf.level = 0.9,
-                         conf.method=c("quantile","HPDinterval"),
+                         conf.method = c("quantile", "HPDinterval"),
+                         rhat = FALSE,
+                         ess = FALSE,
+                         fix.intercept = TRUE,
                          exponentiate = FALSE,
                          ...) {
     ## ignore 'parametric', which may be passed by mice:::summary.mira()
@@ -113,42 +129,67 @@ tidy.stanreg <- function(x,
         stop("Model does not have varying ('ran_vals') or hierarchical ('ran_pars') effects.")
     }
 
+    ## Define point estimate and standard error functions based on robust
+    pointfun <- if (robust) stats::median else base::mean
+    stdfun <- if (robust) stats::mad else stats::sd
+
     nn <- c("estimate", "std.error")
     ret_list <- list()
+
+    ## Track samples needed for rhat/ess computation
+    samples_for_diag <- NULL
+    pars_for_diag <- character(0)
+
     if ("fixed" %in% effects) {
         nv_pars <- names(rstanarm::fixef(x))
-        ret <- cbind(
-            rstanarm::fixef(x),
-            rstanarm::se(x)[nv_pars]
-        )
+
+        if (robust) {
+            ## Use rstanarm's built-in functions (median/mad)
+            ret <- cbind(
+                rstanarm::fixef(x),
+                rstanarm::se(x)[nv_pars]
+            )
+        } else {
+            ## Extract posterior samples and compute mean/sd
+            m <- as.matrix(x$stanfit)
+            m <- m[, colnames(m) %in% nv_pars, drop = FALSE]
+            ret <- cbind(
+                apply(m, 2, pointfun),
+                apply(m, 2, stdfun)
+            )
+        }
 
         if (inherits(x, "polr")) {
             ## also include cutpoints
             cp <- x$zeta
-            se_cp <- apply(as.matrix(x, pars = names(cp)), 2, stats::mad)
+            cp_samples <- as.matrix(x, pars = names(cp))
+            se_cp <- apply(cp_samples, 2, stdfun)
+            if (!robust) {
+                cp <- apply(cp_samples, 2, pointfun)
+            }
             ret <- rbind(ret, cbind(cp, se_cp))
             nv_pars <- c(nv_pars, names(cp))
         }
 
         if (conf.int) {
-
             cifix <- switch(conf.method,
-                            HPDinterval= {
+                            HPDinterval = {
                                 m <- as.matrix(x$stanfit)
-                                m <- m[,colnames(m) %in% nv_pars]
+                                m <- m[, colnames(m) %in% nv_pars, drop = FALSE]
                                 coda::HPDinterval(coda::as.mcmc(m),
-                                                  prob=conf.level)
+                                                  prob = conf.level)
                             },
-                            quantile=rstanarm::posterior_interval(
-                                                   object = x,
-                                                   pars = nv_pars,
-                                                   prob = conf.level
-                                               )
-                            ) ## cifix
+                            quantile = rstanarm::posterior_interval(
+                                object = x,
+                                pars = nv_pars,
+                                prob = conf.level
+                            )
+            ) ## cifix
             ret <- data.frame(ret, cifix)
             nn <- c(nn, "conf.low", "conf.high")
         }
-        ret_list$non_ran_vals <- fix_data_frame(ret, newnames = nn, newcol="term")
+        ret_list$non_ran_vals <- fix_data_frame(ret, newnames = nn, newcol = "term")
+        pars_for_diag <- c(pars_for_diag, nv_pars)
     }
     if ("auxiliary" %in% effects) {
         nn <- c("estimate", "std.error")
@@ -158,14 +199,28 @@ tidy.stanreg <- function(x,
             grep("mean_PPD", parnames, value = TRUE)
         )
         auxpars <- auxpars[which(auxpars %in% parnames)]
-        ret <- summary(x, pars = auxpars)[, c("50%", "sd"), drop = FALSE]
+
+        if (robust) {
+            ## Use summary's 50% (median) and sd
+            ret <- summary(x, pars = auxpars)[, c("50%", "sd"), drop = FALSE]
+        } else {
+            ## Extract posterior samples and compute mean/sd
+            aux_samples <- as.matrix(x$stanfit)
+            aux_samples <- aux_samples[, colnames(aux_samples) %in% auxpars, drop = FALSE]
+            ret <- cbind(
+                apply(aux_samples, 2, pointfun),
+                apply(aux_samples, 2, stdfun)
+            )
+        }
+
         if (conf.int) {
             ints <- rstanarm::posterior_interval(x, pars = auxpars, prob = conf.level)
             ret <- data.frame(ret, ints)
             nn <- c(nn, "conf.low", "conf.high")
         }
         ret_list$auxiliary <-
-            fix_data_frame(ret, newnames = nn, newcol="term")
+            fix_data_frame(ret, newnames = nn, newcol = "term")
+        pars_for_diag <- c(pars_for_diag, auxpars)
     }
     if ("ran_pars" %in% effects) {
         ret <- (rstanarm::VarCorr(x)
@@ -196,13 +251,26 @@ tidy.stanreg <- function(x,
     if ("ran_vals" %in% effects) {
         nn <- c("estimate", "std.error")
         s <- summary(x, pars = "varying") ## goes through to rstanarm
-        ret <- cbind(s[, "50%"], rstanarm::se(x)[rownames(s)])
+        ran_val_pars <- rownames(s)
+
+        if (robust) {
+            ## Use summary's 50% (median) and se (mad)
+            ret <- cbind(s[, "50%"], rstanarm::se(x)[ran_val_pars])
+        } else {
+            ## Extract posterior samples and compute mean/sd
+            rv_samples <- as.matrix(x$stanfit)
+            rv_samples <- rv_samples[, colnames(rv_samples) %in% ran_val_pars, drop = FALSE]
+            ret <- cbind(
+                apply(rv_samples, 2, pointfun),
+                apply(rv_samples, 2, stdfun)
+            )
+        }
 
         if (conf.int) {
             ciran <- rstanarm::posterior_interval(x,
                                                   regex_pars = "^b\\[",
                                                   prob = conf.level
-                                                  )
+            )
             ret <- data.frame(ret, ciran)
             nn <- c(nn, "conf.low", "conf.high")
         }
@@ -211,7 +279,7 @@ tidy.stanreg <- function(x,
             y <- unlist(lapply(strsplit(x, split = split1, fixed = TRUE), "[[", sel1))
             unlist(lapply(strsplit(y, split = split2, fixed = TRUE), "[[", sel2))
         }
-        vv <- fix_data_frame(ret, newnames = nn, newcol="term")
+        vv <- fix_data_frame(ret, newnames = nn, newcol = "term")
         nn <- c("level", "group", "term", nn)
         nms <- vv$term
         vv$term <- NULL
@@ -219,7 +287,8 @@ tidy.stanreg <- function(x,
         grp <- double_splitter(nms, " ", 2, ":", 1)
         trm <- double_splitter(nms, " ", 1, "[", 2)
         vv <- data.frame(lev, grp, trm, vv)
-        ret_list$ran_vals <- fix_data_frame(vv, newnames = nn, newcol="term")
+        ret_list$ran_vals <- fix_data_frame(vv, newnames = nn, newcol = "term")
+        pars_for_diag <- c(pars_for_diag, ran_val_pars)
     }
 
     if (exponentiate) {
@@ -229,7 +298,61 @@ tidy.stanreg <- function(x,
         )
     }
 
-    return(dplyr::bind_rows(ret_list))
+    out <- dplyr::bind_rows(ret_list)
+
+    ## Add rhat and ess if requested
+    if (rhat || ess) {
+        if (!requireNamespace("posterior", quietly = TRUE)) {
+            stop(paste0(
+                paste0(c("rhat", "ess")[c(rhat, ess)], collapse = ", "),
+                " calculation for stanreg objects requires posterior package"
+            ))
+        }
+
+        ## Get draws in the format needed by posterior
+        if (length(pars_for_diag) > 0) {
+            ## Extract posterior samples as array (chains x iterations x parameters)
+            draws <- as.array(x$stanfit)
+            ## Filter to relevant parameters
+            available_pars <- intersect(pars_for_diag, dimnames(draws)[[3]])
+            if (length(available_pars) > 0) {
+                draws <- draws[, , available_pars, drop = FALSE]
+                draws_obj <- posterior::as_draws_array(draws)
+
+                posterior_metrics <- c()
+                if (rhat) {
+                    posterior_metrics <- c(posterior_metrics, rhat = posterior::rhat)
+                }
+                if (ess) {
+                    posterior_metrics <- c(posterior_metrics, ess = posterior::ess_basic)
+                }
+
+                diag_df <- posterior::summarise_draws(draws_obj, posterior_metrics)
+
+                ## Match diagnostics to output terms
+                for (metric in names(posterior_metrics)) {
+                    out[[metric]] <- NA_real_
+                    for (i in seq_len(nrow(diag_df))) {
+                        par_name <- diag_df$variable[i]
+                        ## Match parameter to term (may need adjustment for different naming)
+                        match_idx <- which(out$term == par_name)
+                        if (length(match_idx) > 0) {
+                            out[[metric]][match_idx] <- diag_df[[metric]][i]
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    ## Apply fix.intercept: rstanarm already uses "(Intercept)" by default.
+    ## When fix.intercept = FALSE, convert back to "Intercept" (no parentheses)
+    ## to match brms behavior when fix.intercept = FALSE.
+    if (!fix.intercept && "term" %in% names(out)) {
+        out$term <- gsub("^\\(Intercept\\)$", "Intercept", out$term)
+    }
+
+    return(reorder_cols(out))
 }
 
 

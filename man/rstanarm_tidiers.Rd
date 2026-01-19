@@ -9,9 +9,13 @@
 \method{tidy}{stanreg}(
   x,
   effects = c("fixed", "ran_pars"),
+  robust = TRUE,
   conf.int = FALSE,
   conf.level = 0.9,
   conf.method = c("quantile", "HPDinterval"),
+  rhat = FALSE,
+  ess = FALSE,
+  fix.intercept = TRUE,
   exponentiate = FALSE,
   ...
 )
@@ -26,6 +30,11 @@
 \code{"ran_vals"}, or \code{"ran_pars"}.
 See the Value section for details.}
 
+\item{robust}{Whether to use median and median absolute deviation of
+the posterior distribution, rather than mean and standard deviation,
+to derive point estimates and uncertainty. Defaults to \code{TRUE}
+for consistency with \pkg{rstanarm}'s default behavior.}
+
 \item{conf.int}{If \code{TRUE} columns for the lower (\code{conf.low}) and upper (\code{conf.high}) bounds of the
 \code{100*prob}\% posterior uncertainty intervals are included. See
 \code{\link[rstantools]{posterior_interval}} for details.}
@@ -34,6 +43,15 @@ See the Value section for details.}
 
 \item{conf.method}{method for computing confidence intervals
 ("quantile" or "HPDinterval")}
+
+\item{rhat}{Whether to calculate the *Rhat* convergence metric
+(\code{FALSE} by default). Requires the \pkg{posterior} package.}
+
+\item{ess}{Whether to calculate the *effective sample size* (ESS) convergence metric
+(\code{FALSE} by default). Requires the \pkg{posterior} package.}
+
+\item{fix.intercept}{Rename \code{"Intercept"} to \code{"(Intercept)"},
+to match behavior of other model types? Defaults to \code{TRUE}.}
 
 \item{exponentiate}{whether to exponentiate the fixed-effect coefficient estimates and confidence intervals (common for logistic regression); if \code{TRUE}, also scales the standard errors by the exponentiated coefficient, transforming them to the new scale}
 
@@ -51,9 +69,11 @@ The structure depends on the method chosen.
 When \code{effects="fixed"} (the default), \code{tidy.stanreg} returns
 one row for each coefficient, with three columns:
 \item{term}{The name of the corresponding term in the model.}
-\item{estimate}{A point estimate of the coefficient (posterior median).}
+\item{estimate}{A point estimate of the coefficient (posterior median if
+  \code{robust=TRUE}, posterior mean if \code{robust=FALSE}).}
 \item{std.error}{A standard error for the point estimate based on
-\code{\link[stats]{mad}}. See the \emph{Uncertainty estimates} section in
+\code{\link[stats]{mad}} if \code{robust=TRUE}, or standard deviation
+if \code{robust=FALSE}. See the \emph{Uncertainty estimates} section in
 \code{\link[rstanarm]{print.stanreg}} for more details.}
 
 For models with group-specific parameters (e.g., models fit with
