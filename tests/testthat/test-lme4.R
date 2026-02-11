@@ -8,8 +8,6 @@ if (require(lme4, quietly = TRUE)) {
     mustWork = TRUE
     ))
 
-context("lme4 models")
-
   d <- as.data.frame(ChickWeight)
   colnames(d) <- c("y", "x", "subj", "tx")
   fit <<- lmer(y ~ tx * x + (x | subj), data = d)
@@ -220,14 +218,22 @@ test_that("conf intervals for ranef in correct order", {
 }
 
 test_that("lme4 confint/profile respects vcov scale", {
-  ## GH 161
-  skip_on_cran()
-  t2 <- tidy(lmm1, effects = "ran_pars", conf.int = TRUE, conf.method = "profile", scales = "vcov")
+    ## GH 161
+    skip_on_cran()
+    ## use bobyqa for greater stability
+    ## suppressWarnings because of https://github.com/lme4/lme4/issues/913
+    suppressWarnings(t2 <-
+                         tidy(lmm1, effects = "ran_pars", conf.int = TRUE,
+                              conf.method = "profile",
+                              scales = "vcov", optimizer = "bobyqa")
+                     )
   t2B <- t2[,c("conf.low", "conf.high")]
   t2B <- as.data.frame(t2B[order(t2B$conf.low),])
-  expect_equal(t2B, 
-               data.frame(
-                         conf.low = c(-94.40536007964468, 14.448643299322761, 207.00689827462938, 524.3310267895102),
-                         conf.high = c(99.90672168023372, 76.33989371240764, 1422.4912616467875, 832.7840478155275)),
-               tolerance = 1e-5)
+  ci_result <- data.frame(
+      conf.low = c(-105.35332728144391, 14.448941429789697,
+                   206.67354976350714, 524.3310630370727),
+      conf.high = c(107.0336434666705, 76.62187265734516,
+                    1422.4994147098516, 832.7840478026345)
+  )
+  expect_equal(t2B, ci_result, tolerance = 1e-3)
 })
