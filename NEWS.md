@@ -1,9 +1,12 @@
+
+
 # CHANGES IN broom.mixed VERSION 0.2.9.7
 
+- `lme4` tidying with profile CIs now respects `scale = "vcov"` (GH #161, @richmaparker)
 - added `glance` method for `TMB` objects
 - changes for compatibility with `lme4` >= 2.0.0
 
-# CHANGES IN broom.mixed VERSION 0.2.9.6
+# CHANGES IN broom.mixed VERSION 0.2.9.6 (2024-10-15)
 
 - CRAN maintenance release
 - `stanreg` tidiers should work for models without random effects

@@ -214,7 +214,20 @@ test_that("conf intervals for ranef in correct order", {
     ## GH 65
     t1 <- tidy(lmm1,conf.int=TRUE,effect="ran_pars",conf.method="profile",quiet=TRUE)
     
-cor_vals <- t1[t1$term=="cor__(Intercept).Days",]
+    cor_vals <- t1[t1$term=="cor__(Intercept).Days",]
     expect_true(cor_vals$conf.low>(-1) && cor_vals$conf.high<1)
 })
 }
+
+test_that("lme4 confint/profile respects vcov scale", {
+  ## GH 161
+  skip_on_cran()
+  t2 <- tidy(lmm1, effects = "ran_pars", conf.int = TRUE, conf.method = "profile", scales = "vcov")
+  t2B <- t2[,c("conf.low", "conf.high")]
+  t2B <- as.data.frame(t2B[order(t2B$conf.low),])
+  expect_equal(t2B, 
+               data.frame(
+                         conf.low = c(-94.40536007964468, 14.448643299322761, 207.00689827462938, 524.3310267895102),
+                         conf.high = c(99.90672168023372, 76.33989371240764, 1422.4912616467875, 832.7840478155275)),
+               tolerance = 1e-5)
+})

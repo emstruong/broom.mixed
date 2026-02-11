@@ -248,8 +248,7 @@ tidy.merMod <- function(x, effects = c("ran_pars", "fixed"),
       }
       class(vc) <- "VarCorr.merMod"
     }
-    ## n.b. use order="lower.tri" here so that term order matches
-    ## that returned by confint() !
+    ## n.b. use correct order to match that returned by confint()
     ord <- if (packageVersion("lme4") >= "2.0.0") "cov.last" else "lower.tri"
     ret <- as.data.frame(vc, order=ord)
     ## purrr::map_at?
@@ -278,10 +277,9 @@ tidy.merMod <- function(x, effects = c("ran_pars", "fixed"),
       c("group", "term", "estimate")
     )
 
-    ## these are in 'lower.tri' order, need to make sure this
-    ## is matched in as.data.frame() below
     if (conf.int) {
-        ciran <- cifun(p, parm = "theta_", method = conf.method, level = conf.level, ...)
+        prof.scale <- if (rscale == "vcov") "varcov" else "sdcor"
+        ciran <- cifun(p, parm = "theta_", method = conf.method, level = conf.level, prof.scale = prof.scale, ...)
         ret <- data.frame(ret, ciran, stringsAsFactors = FALSE)
     }
     ret_list$ran_pars <- ret
