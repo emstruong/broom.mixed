@@ -206,6 +206,16 @@ tidy.brmsfit <- function(x, parameters = NA,
   comp_pref_RE <- "(?<=((^|_)))(zi_|disp_)"
   out$term <- stringr::str_remove(out$term, comp_pref_RE)
 
+  ## Extract response column for multi-response models
+  if (is.multiresp) {
+    resp_names <- names(x$formula$forms)
+    ## Pattern: response_term -> extract response prefix
+    resp_pattern <- paste0("^(", paste(resp_names, collapse = "|"), ")_")
+    out$response <- stringr::str_extract(out$term, resp_pattern)
+    out$response <- stringr::str_remove(out$response, "_$")
+    out$term <- stringr::str_remove(out$term, resp_pattern)
+  }
+
   if (exponentiate) {
     vv <- c("estimate", "conf.low", "conf.high")
     out <- (out
@@ -345,13 +355,23 @@ tidy_brms_varcorr <- function(x, robust, conf.int, probs, conf.method, conf.leve
     }
   }
 
-  ## Check for residual sigma
-  if ("sigma" %in% brms::variables(x)) {
-    sigma_summary <- brms::posterior_summary(x, variable = "sigma",
+  ## Check for residual sigma (single or response-specific)
+  all_vars <- brms::variables(x)
+  sigma_vars <- grep("^sigma($|_)", all_vars, value = TRUE)
+  for (sigma_var in sigma_vars) {
+    sigma_summary <- brms::posterior_summary(x, variable = sigma_var,
                                               robust = robust, probs = probs)
+    ## For multi-response models, sigma_response -> response-specific term
+    if (sigma_var == "sigma") {
+      term_name <- paste0("sd", sep, "Observation")
+    } else {
+      ## sigma_response -> sd__response_Observation
+      resp_name <- sub("^sigma_", "", sigma_var)
+      term_name <- paste0(resp_name, "_sd", sep, "Observation")
+    }
     row_data <- dplyr::tibble(
       group = "Residual",
-      term = paste0("sd", sep, "Observation"),
+      term = term_name,
       estimate = sigma_summary[, "Estimate"],
       std.error = sigma_summary[, "Est.Error"]
     )
@@ -379,13 +399,13 @@ tidy_brms_varcorr <- function(x, robust, conf.int, probs, conf.method, conf.leve
 #' Compute HPD intervals for variance components
 #' @noRd
 compute_varcorr_hpd <- function(x, out, conf.level, sep) {
-  ## Get all sd_ and cor_ parameters
+  ## Get all sd_ and cor_ parameters, plus sigma (single or response-specific)
   all_vars <- brms::variables(x)
   sd_vars <- grep("^sd_", all_vars, value = TRUE)
   cor_vars <- grep("^cor_", all_vars, value = TRUE)
-  sigma_var <- if ("sigma" %in% all_vars) "sigma" else character(0)
+  sigma_vars <- grep("^sigma($|_)", all_vars, value = TRUE)
 
-  vars_to_get <- c(sd_vars, cor_vars, sigma_var)
+  vars_to_get <- c(sd_vars, cor_vars, sigma_vars)
 
   if (length(vars_to_get) > 0) {
     samples <- brms::as_draws_matrix(x, variable = vars_to_get)
@@ -399,6 +419,10 @@ compute_varcorr_hpd <- function(x, out, conf.level, sep) {
       ## Build possible parameter name patterns
       if (out$term[i] == paste0("sd", sep, "Observation")) {
         param_name <- "sigma"
+      } else if (grepl(paste0("_sd", sep, "Observation$"), out$term[i])) {
+        ## Response-specific sigma: resp_sd__Observation -> sigma_resp
+        resp_name <- sub(paste0("_sd", sep, "Observation$"), "", out$term[i])
+        param_name <- paste0("sigma_", resp_name)
       } else if (grepl(paste0("^sd", sep), out$term[i])) {
         ## sd parameter: sd__term -> sd_group__term
         term_part <- sub(paste0("^sd", sep), "", out$term[i])

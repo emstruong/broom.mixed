@@ -79,9 +79,9 @@ if (suppressPackageStartupMessages(require("brms", quietly = TRUE))) {
                            "349", "350", "351", "352", "369", "370", "371", "372"), 2)
     test_that("ran_vals returns correct output", {
         expect_equal(nrow(zz5), 36)
-        expect_equal(nrow(zz5 %>% filter(group == "Subject")), 36)
-        expect_equal(nrow(zz5 %>% filter(term == "(Intercept)")), 18)
-        expect_equal(nrow(zz5 %>% filter(term == "Days_extra")), 18)
+        expect_equal(nrow(zz5 %>% dplyr::filter(group == "Subject")), 36)
+        expect_equal(nrow(zz5 %>% dplyr::filter(term == "(Intercept)")), 18)
+        expect_equal(nrow(zz5 %>% dplyr::filter(term == "Days_extra")), 18)
         expect_equal(zz5$level, sleepstudy.levels)
     })
     
