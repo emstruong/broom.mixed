@@ -272,15 +272,25 @@ tidy_brms_fixef <- function(x, robust, conf.int, probs, conf.method, conf.level,
 #' @noRd
 tidy_brms_varcorr <- function(x, robust, conf.int, probs, conf.method, conf.level, sep) {
   ## Use brms::VarCorr() for variance components
-  vc <- brms::VarCorr(x, summary = TRUE, robust = robust, probs = probs)
+  ## VarCorr throws an error for models without random effects
+  vc <- tryCatch(
+    brms::VarCorr(x, summary = TRUE, robust = robust, probs = probs),
+    error = function(e) NULL
+  )
 
   if (is.null(vc) || length(vc) == 0) {
-    return(NULL)
+    ## Model may still have sigma (residual SD) without random effects
+    vc <- list()
   }
 
   results <- list()
 
   for (group_name in names(vc)) {
+    ## Skip residual__ group - we handle sigma separately below
+    if (group_name == "residual__") {
+      next
+    }
+
     group_vc <- vc[[group_name]]
 
     ## Extract standard deviations
@@ -307,6 +317,7 @@ tidy_brms_varcorr <- function(x, robust, conf.int, probs, conf.method, conf.leve
     }
 
     ## Extract correlations
+    ## Note: VarCorr cor array has dimensions [vars, stats, vars]
     if (!is.null(group_vc$cor)) {
       cor_arr <- group_vc$cor
       if (is.array(cor_arr) && length(dim(cor_arr)) == 3) {
@@ -319,12 +330,12 @@ tidy_brms_varcorr <- function(x, robust, conf.int, probs, conf.method, conf.leve
               row_data <- dplyr::tibble(
                 group = group_name,
                 term = term_name,
-                estimate = cor_arr[i, j, "Estimate"],
-                std.error = cor_arr[i, j, "Est.Error"]
+                estimate = cor_arr[i, "Estimate", j],
+                std.error = cor_arr[i, "Est.Error", j]
               )
-              if (conf.int && conf.method != "HPDinterval" && dim(cor_arr)[3] >= 4) {
-                row_data$conf.low <- cor_arr[i, j, 3]
-                row_data$conf.high <- cor_arr[i, j, 4]
+              if (conf.int && conf.method != "HPDinterval" && dim(cor_arr)[2] >= 4) {
+                row_data$conf.low <- cor_arr[i, 3, j]
+                row_data$conf.high <- cor_arr[i, 4, j]
               }
               results[[length(results) + 1]] <- row_data
             }
