@@ -137,9 +137,6 @@ tidy.stanreg <- function(x,
     ## Track parameter names for rhat/ess lookup
     pars_for_diag <- character(0)
 
-    ## Get the summary matrix from rstanarm (contains mean, sd, 50%, Rhat, n_eff, etc.)
-    stan_summary <- x$stan_summary
-
     if ("fixed" %in% effects) {
         nv_pars <- names(rstanarm::fixef(x))
 
@@ -150,8 +147,9 @@ tidy.stanreg <- function(x,
                 rstanarm::se(x)[nv_pars]
             )
         } else {
-            ## Use rstanarm's summary which already contains mean and sd
-            ret <- stan_summary[nv_pars, c("mean", "sd"), drop = FALSE]
+            ## Use rstanarm's summary() method for mean/sd
+            summ <- summary(x, pars = nv_pars)
+            ret <- summ[, c("mean", "sd"), drop = FALSE]
         }
 
         if (inherits(x, "polr")) {
@@ -161,8 +159,9 @@ tidy.stanreg <- function(x,
                 cp <- x$zeta
                 se_cp <- rstanarm::se(x)[cp_names]
             } else {
-                cp <- stan_summary[cp_names, "mean"]
-                se_cp <- stan_summary[cp_names, "sd"]
+                cp_summ <- summary(x, pars = cp_names)
+                cp <- cp_summ[, "mean"]
+                se_cp <- cp_summ[, "sd"]
             }
             ret <- rbind(ret, cbind(cp, se_cp))
             nv_pars <- c(nv_pars, cp_names)
@@ -171,7 +170,7 @@ tidy.stanreg <- function(x,
         if (conf.int) {
             cifix <- switch(conf.method,
                             HPDinterval = {
-                                m <- as.matrix(x$stanfit)
+                                m <- as.matrix(x)
                                 m <- m[, colnames(m) %in% nv_pars, drop = FALSE]
                                 coda::HPDinterval(coda::as.mcmc(m),
                                                   prob = conf.level)
@@ -190,31 +189,34 @@ tidy.stanreg <- function(x,
     }
     if ("auxiliary" %in% effects) {
         nn <- c("estimate", "std.error")
-        parnames <- rownames(stan_summary)
+        ## Get full summary to find available auxiliary parameters
+        full_summ <- summary(x)
+        parnames <- rownames(full_summ)
         auxpars <- c(
             "sigma", "shape", "overdispersion", "R2", "log-fit_ratio",
             grep("mean_PPD", parnames, value = TRUE)
         )
         auxpars <- auxpars[which(auxpars %in% parnames)]
 
-        if (robust) {
-            ## Use stan_summary's 50% (median) for estimate
-            ## Note: rstanarm's se() uses MAD for robust SE, but stan_summary
-            ## only has sd. For auxiliary params, use sd as approximation.
-            ret <- stan_summary[auxpars, c("50%", "sd"), drop = FALSE]
-        } else {
-            ## Use stan_summary's mean and sd
-            ret <- stan_summary[auxpars, c("mean", "sd"), drop = FALSE]
-        }
+        if (length(auxpars) > 0) {
+            aux_summ <- summary(x, pars = auxpars)
+            if (robust) {
+                ## Use summary's 50% (median) for estimate and sd
+                ret <- aux_summ[, c("50%", "sd"), drop = FALSE]
+            } else {
+                ## Use summary's mean and sd
+                ret <- aux_summ[, c("mean", "sd"), drop = FALSE]
+            }
 
-        if (conf.int) {
-            ints <- rstanarm::posterior_interval(x, pars = auxpars, prob = conf.level)
-            ret <- data.frame(ret, ints)
-            nn <- c(nn, "conf.low", "conf.high")
+            if (conf.int) {
+                ints <- rstanarm::posterior_interval(x, pars = auxpars, prob = conf.level)
+                ret <- data.frame(ret, ints)
+                nn <- c(nn, "conf.low", "conf.high")
+            }
+            ret_list$auxiliary <-
+                fix_data_frame(ret, newnames = nn, newcol = "term")
+            pars_for_diag <- c(pars_for_diag, auxpars)
         }
-        ret_list$auxiliary <-
-            fix_data_frame(ret, newnames = nn, newcol = "term")
-        pars_for_diag <- c(pars_for_diag, auxpars)
     }
     if ("ran_pars" %in% effects) {
         ret <- (rstanarm::VarCorr(x)
@@ -244,18 +246,19 @@ tidy.stanreg <- function(x,
 
     if ("ran_vals" %in% effects) {
         nn <- c("estimate", "std.error")
-        ## Get random effect parameter names (those starting with "b[")
-        ran_val_pars <- grep("^b\\[", rownames(stan_summary), value = TRUE)
+        ## Use summary(x, pars = "varying") to get random effects
+        ran_summ <- summary(x, pars = "varying")
+        ran_val_pars <- rownames(ran_summ)
 
         if (robust) {
-            ## Use stan_summary's 50% (median) and MAD from rstanarm::se()
+            ## Use summary's 50% (median) and MAD from rstanarm::se()
             ret <- cbind(
-                stan_summary[ran_val_pars, "50%"],
+                ran_summ[, "50%"],
                 rstanarm::se(x)[ran_val_pars]
             )
         } else {
-            ## Use stan_summary's mean and sd
-            ret <- stan_summary[ran_val_pars, c("mean", "sd"), drop = FALSE]
+            ## Use summary's mean and sd
+            ret <- ran_summ[, c("mean", "sd"), drop = FALSE]
         }
 
         if (conf.int) {
@@ -293,26 +296,27 @@ tidy.stanreg <- function(x,
     out <- dplyr::bind_rows(ret_list)
 
     ## Add rhat and ess if requested
-    ## Use rstanarm's built-in Rhat and n_eff from stan_summary
+    ## Use rstanarm's summary() method which includes Rhat and n_eff columns
     if (rhat || ess) {
         if (length(pars_for_diag) > 0) {
-            available_pars <- intersect(pars_for_diag, rownames(stan_summary))
+            diag_summ <- summary(x, pars = pars_for_diag)
+            available_pars <- intersect(pars_for_diag, rownames(diag_summ))
             if (length(available_pars) > 0) {
-                if (rhat && "Rhat" %in% colnames(stan_summary)) {
+                if (rhat && "Rhat" %in% colnames(diag_summ)) {
                     out$rhat <- NA_real_
                     for (par_name in available_pars) {
                         match_idx <- which(out$term == par_name)
                         if (length(match_idx) > 0) {
-                            out$rhat[match_idx] <- stan_summary[par_name, "Rhat"]
+                            out$rhat[match_idx] <- diag_summ[par_name, "Rhat"]
                         }
                     }
                 }
-                if (ess && "n_eff" %in% colnames(stan_summary)) {
+                if (ess && "n_eff" %in% colnames(diag_summ)) {
                     out$ess <- NA_real_
                     for (par_name in available_pars) {
                         match_idx <- which(out$term == par_name)
                         if (length(match_idx) > 0) {
-                            out$ess[match_idx] <- stan_summary[par_name, "n_eff"]
+                            out$ess[match_idx] <- diag_summ[par_name, "n_eff"]
                         }
                     }
                 }
