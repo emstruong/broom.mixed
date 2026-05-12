@@ -141,8 +141,8 @@ tidy.brmsfit <- function(x, parameters = NA,
   ## Check for underscores in parameter names
   xr <- brms::restructure(x)
   has_ranef <- nrow(xr$ranef) > 0
-  if (any(grepl("_", rownames(fixef(x)))) ||
-      (has_ranef && any(grepl("_", names(ranef(x)))))) {
+  if (any(grepl("_", rownames(brms::fixef(x)))) ||
+      (has_ranef && any(grepl("_", names(brms::ranef(x)))))) {
     warning("some parameter names contain underscores: term naming may be unreliable!")
   }
 
