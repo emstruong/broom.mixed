@@ -250,7 +250,9 @@ tidy.stanreg <- function(x,
     if ("ran_vals" %in% effects) {
         nn <- c("estimate", "std.error")
         ## Get random effect parameter names (those starting with "b[")
+        ## Filter out _NEW_ parameters which are predictions for new group levels
         ran_val_pars <- grep("^b\\[", rownames(stan_summary), value = TRUE)
+        ran_val_pars <- ran_val_pars[!grepl("_NEW_", ran_val_pars)]
 
         if (robust) {
             ## Use stan_summary's 50% (median) for estimate

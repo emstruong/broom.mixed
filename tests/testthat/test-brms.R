@@ -20,29 +20,29 @@ if (require(brms, quietly = TRUE) && require(rstanarm, quietly=TRUE)) {
   ### brms_RE
   expected <- tibble::tribble(
      ~effect, ~component,     ~group,                         ~term,
-     "fixed",     "cond",         NA,                 "(Intercept)",
-     "fixed",     "cond",         NA,                  "Days_extra",
-  "ran_pars",     "cond",  "Subject",             "sd__(Intercept)",
-  "ran_pars",     "cond",  "Subject",              "sd__Days_extra",
-  "ran_pars",     "cond",  "Subject", "cor__(Intercept).Days_extra",
-  "ran_pars",     "cond", "Residual",             "sd__Observation"
+     "fixed",     "cond", NA_character_,                 "(Intercept)",
+     "fixed",     "cond", NA_character_,                  "Days_extra",
+  "ran_pars",     "cond",     "Subject",             "sd__(Intercept)",
+  "ran_pars",     "cond",     "Subject",              "sd__Days_extra",
+  "ran_pars",     "cond",     "Subject", "cor__(Intercept).Days_extra",
+  "ran_pars",     "cond",    "Residual",             "sd__Observation"
   )
   observed <- suppressWarnings(tidy(brms_RE))
   expect_equal(observed[, 1:4], expected)
   ### brms_noran
   expected <- tibble::tribble(
      ~effect, ~component,     ~group,             ~term,
-     "fixed",     "cond",         NA,     "(Intercept)",
-     "fixed",     "cond",         NA,              "wt",
-  "ran_pars",     "cond", "Residual", "sd__Observation"
+     "fixed",     "cond", NA_character_,     "(Intercept)",
+     "fixed",     "cond", NA_character_,              "wt",
+  "ran_pars",     "cond",    "Residual", "sd__Observation"
   )
   observed <- suppressWarnings(tidy(brms_noran))
   expect_equal(observed[, 1:4], expected)
   ### brms_brm_fit4
   expected <- tibble::tribble(
-  ~effect, ~component, ~group,         ~term,
-  "fixed",     "cond",     NA, "(Intercept)",
-  "fixed",     "cond",     NA,           "x"
+  ~effect, ~component,         ~group,         ~term,
+  "fixed",     "cond", NA_character_, "(Intercept)",
+  "fixed",     "cond", NA_character_,           "x"
   )
   observed <- suppressWarnings(tidy(brms_brm_fit4))
   expect_equal(observed[, 1:4], expected)
