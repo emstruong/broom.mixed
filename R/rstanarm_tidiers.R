@@ -87,10 +87,15 @@ NULL
 #' For models with group-specific parameters (e.g., models fit with
 #' \code{\link[rstanarm]{stan_glmer}}), setting \code{effects="ran_vals"}
 #' selects the group-level parameters instead of the non-varying regression
-#' coefficients. Addtional columns are added indicating the \code{level} and
-#' \code{group}. Specifying \code{effects="ran_pars"} selects the
+#' coefficients. Additional columns are added indicating the \code{level} and
+#' \code{group}. Note that for \code{ran_vals}, the \code{std.error} column
+#' always contains the posterior standard deviation, not MAD, regardless of
+#' the \code{robust} setting. This is because \pkg{rstanarm} does not provide
+#' MAD estimates for individual random effect values (see rstanarm issue #633).
+#' Specifying \code{effects="ran_pars"} selects the
 #' standard deviations and (for certain models) correlations of the group-level
-#' parameters.
+#' parameters. Note that \code{ran_pars} does not include \code{std.error}
+#' because these are not readily available from \pkg{rstanarm}.
 #'
 #' Setting \code{effects="auxiliary"} will select parameters other than those
 #' included by the other options. The particular parameters depend on which
@@ -248,10 +253,14 @@ tidy.stanreg <- function(x,
         ran_val_pars <- grep("^b\\[", rownames(stan_summary), value = TRUE)
 
         if (robust) {
-            ## Use stan_summary's 50% (median) and MAD from rstanarm::se()
+            ## Use stan_summary's 50% (median) for estimate
+            ## Note: rstanarm::se() does not return MAD for random effect values
+            ## (see rstanarm issue #633), so we use sd from stan_summary instead.
+            ## This is a known limitation - std.error for ran_vals is always sd,
+            ## not MAD, regardless of the robust setting.
             ret <- cbind(
                 stan_summary[ran_val_pars, "50%"],
-                rstanarm::se(x)[ran_val_pars]
+                stan_summary[ran_val_pars, "sd"]
             )
         } else {
             ## Use stan_summary's mean and sd
