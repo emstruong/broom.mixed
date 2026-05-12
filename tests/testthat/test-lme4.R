@@ -8,8 +8,6 @@ if (require(lme4, quietly = TRUE)) {
     mustWork = TRUE
     ))
 
-context("lme4 models")
-
   d <- as.data.frame(ChickWeight)
   colnames(d) <- c("y", "x", "subj", "tx")
   fit <<- lmer(y ~ tx * x + (x | subj), data = d)
@@ -214,7 +212,28 @@ test_that("conf intervals for ranef in correct order", {
     ## GH 65
     t1 <- tidy(lmm1,conf.int=TRUE,effect="ran_pars",conf.method="profile",quiet=TRUE)
     
-cor_vals <- t1[t1$term=="cor__(Intercept).Days",]
+    cor_vals <- t1[t1$term=="cor__(Intercept).Days",]
     expect_true(cor_vals$conf.low>(-1) && cor_vals$conf.high<1)
 })
 }
+
+test_that("lme4 confint/profile respects vcov scale", {
+    ## GH 161
+    skip_on_cran()
+    ## use bobyqa for greater stability
+    ## suppressWarnings because of https://github.com/lme4/lme4/issues/913
+    suppressWarnings(t2 <-
+                         tidy(lmm1, effects = "ran_pars", conf.int = TRUE,
+                              conf.method = "profile",
+                              scales = "vcov", optimizer = "bobyqa")
+                     )
+  t2B <- t2[,c("conf.low", "conf.high")]
+  t2B <- as.data.frame(t2B[order(t2B$conf.low),])
+  ci_result <- data.frame(
+      conf.low = c(-105.35332728144391, 14.448941429789697,
+                   206.67354976350714, 524.3310630370727),
+      conf.high = c(107.0336434666705, 76.62187265734516,
+                    1422.4994147098516, 832.7840478026345)
+  )
+  expect_equal(t2B, ci_result, tolerance = 1e-3)
+})
